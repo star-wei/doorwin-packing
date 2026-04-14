@@ -66,17 +66,25 @@ if st.button("🚀 生成装箱方案", type="primary"):
             weight=first_comp.weight,
         )
         
-        # 获取该工厂的箱型（这里简化：用全部箱型过滤品牌）
+        # 获取该工厂的箱型
         factory_boxes = [b for b in BOX_DATABASE if b.factory_id == factory_result.factory_id]
-        if not factory_boxes:
-            # fallback：用推荐的品牌箱型
-            factory_boxes = [b for b in BOX_DATABASE if b.brand == brand] or BOX_DATABASE
         
-        # 装箱
+        # 装箱：先尝试工厂专属箱型
         packed_boxes = greedy_multi_packing(components, box_list=factory_boxes)
         
+        # 如果工厂箱型无法装下，回退到全局箱型
+        fallback_global = False
+        if not packed_boxes:
+            fallback_global = True
+            packed_boxes = greedy_multi_packing(components, box_list=BOX_DATABASE)
+        
         # 展示结果
-        st.success(f"工厂分配：{factory_result.factory_name}（ID: {factory_result.factory_id}）{'[降级匹配]' if factory_result.is_fallback else ''}")
+        fallback_msg = ""
+        if factory_result.is_fallback:
+            fallback_msg += " [降级匹配]"
+        if fallback_global:
+            fallback_msg += " | 当前工厂无适配箱型，已自动扩大到全局最优匹配"
+        st.success(f"工厂分配：{factory_result.factory_name}（ID: {factory_result.factory_id}）{fallback_msg}")
         
         col1, col2, col3 = st.columns(3)
         col1.metric("总组件数", len(components))

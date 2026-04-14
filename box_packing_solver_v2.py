@@ -142,7 +142,7 @@ FACTORY_DATABASE: List[Factory] = [
     Factory("F2", "绿盾工厂", ["绿盾"], ["防盗门", "防火门"], (3500, 2500, 2500), 1200, priority=1),
     Factory("F3", "车库门工厂", ["车库门"], ["车库门", "钢质门"], (1000, 2500, 6500), 800, priority=1),
     Factory("F4", "折叠门工厂", ["折叠门"], ["折叠门", "推拉门"], (1000, 2500, 6500), 1000, priority=1),
-    Factory("F5", "凯研工厂", ["凯研"], ["铝合金门", "系统窗", "钢化玻璃门"], (6000, 2000, 2500), 1200, priority=1),
+    Factory("F5", "凯研工厂", ["凯研"], ["铝合金门", "系统窗", "钢化玻璃门", "fixed_window", "fixed_door"], (6000, 2000, 2500), 1200, priority=1),
     Factory("F6", "凯撒工厂", ["凯撒"], ["大型门", "特种门"], (5000, 3000, 3000), 1500, priority=1),
 ]
 
@@ -180,7 +180,7 @@ def assign_factory(
             )
         brand_ok = brand in f.supported_brands
         type_ok = product_type in f.supported_types
-        size_ok = all(d <= m for d, m in zip(sorted(dimensions), f.max_dimensions))
+        size_ok = all(d <= m for d, m in zip(sorted(dimensions), sorted(f.max_dimensions)))
         weight_ok = weight <= f.max_weight
         if brand_ok and type_ok and size_ok and weight_ok:
             candidates.append(f)
@@ -195,7 +195,7 @@ def assign_factory(
         )
 
     # 降级策略：仅按尺寸+重量匹配
-    fallback = [f for f in FACTORY_DATABASE if all(d <= m for d, m in zip(sorted(dimensions), f.max_dimensions)) and weight <= f.max_weight]
+    fallback = [f for f in FACTORY_DATABASE if all(d <= m for d, m in zip(sorted(dimensions), sorted(f.max_dimensions))) and weight <= f.max_weight]
     if fallback:
         best = min(fallback, key=lambda f: f.priority)
         return FactoryAssignmentResult(
@@ -406,8 +406,9 @@ def can_fit_multiple(
     """
     简化版多件装箱判定：
     - 总重量约束
-    - 总尺寸约束（简化：各组件单件都能装入，且总体积不超过箱子体积的 85%）
-    - 长条形组件额外检查：最长边之和不超过箱子最长边
+    - 总体积约束
+    - 每个组件单独必须能装入
+    - 多件合并时，尝试沿三维方向简单堆叠，检查最小包围盒是否能放入箱子
     """
     total_weight = sum(c.weight for c in components)
     if total_weight > box.net_weight * weight_safety_factor:
@@ -422,16 +423,27 @@ def can_fit_multiple(
         if can_fit(c.dimensions, box.dimensions, padding_mm) is None:
             return False
 
-    # 长条形组件长度和检查（防止多个长条堆叠超长）
-    sorted_box_dims = box.dimensions
-    max_box_dim = sorted_box_dims[-1]
-    long_items = [c for c in components if max(c.dimensions) > max_box_dim * 0.6]
-    if long_items:
-        sum_longest = sum(max(c.dimensions) for c in long_items)
-        if sum_longest > max_box_dim * 1.5:
-            return False
+    # 多件合并：尝试沿各维度堆叠，只要有一种堆叠方式能放入箱子即可
+    if len(components) <= 1:
+        return True
 
-    return True
+    # 取所有组件排序后的三边，尝试在每个维度上累加
+    comp_dims = [c.dimensions for c in components]  # 已排序 (小, 中, 大)
+    
+    # 方案1：沿第0维（最短边）堆叠
+    s0 = (sum(d[0] for d in comp_dims), max(d[1] for d in comp_dims), max(d[2] for d in comp_dims))
+    # 方案2：沿第1维（中间边）堆叠
+    s1 = (max(d[0] for d in comp_dims), sum(d[1] for d in comp_dims), max(d[2] for d in comp_dims))
+    # 方案3：沿第2维（最长边）堆叠
+    s2 = (max(d[0] for d in comp_dims), max(d[1] for d in comp_dims), sum(d[2] for d in comp_dims))
+    
+    box_dims = box.dimensions
+    for stacked in (s0, s1, s2):
+        padded = tuple(s + padding_mm for s in stacked)
+        if all(p <= b for p, b in zip(padded, box_dims)):
+            return True
+
+    return False
 
 
 def greedy_multi_packing(
